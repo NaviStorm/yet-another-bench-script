@@ -70,11 +70,24 @@ done
 
 # check for local fio/iperf installs
 command -v fio >/dev/null 2>&1 && LOCAL_FIO=true || unset LOCAL_FIO
+if [[ "$OSTYPE" == *arwin* && "$LOCAL_FIO" != "true" ]]; then
+	SKIP_FIO="True"
+fi
 command -v iperf3 >/dev/null 2>&1 && LOCAL_IPERF=true || unset LOCAL_IPERF
+if [[ "$OSTYPE" == *arwin* && "$LOCAL_IPERF" != "true" ]]; then
+	SKIP_IPERF="True"
+fi
 
 # test if the host has IPv4/IPv6 connectivity
-IPV4_CHECK=$((ping -4 -c 1 -W 4 ipv4.google.com >/dev/null 2>&1 && echo true) || curl -s -4 -m 4 icanhazip.com 2> /dev/null)
-IPV6_CHECK=$((ping -6 -c 1 -W 4 ipv6.google.com >/dev/null 2>&1 && echo true) || curl -s -6 -m 4 icanhazip.com 2> /dev/null)
+if [[ $OSTYPE == *arwin* ]]; then
+	CMD_PING_6=ping6
+	OPT_PING_4=""
+else
+	CMD_PING_6="ping -6"
+	OPT_PING_4="-4"
+fi
+IPV4_CHECK=$((ping $OPT_PING_4 -c 1 -W 4 ipv4.google.com >/dev/null 2>&1 && echo true) || curl -s -4 -m 4 icanhazip.com 2> /dev/null)
+IPV6_CHECK=$(($CMD_PING_6 -c 1 -W 4 ipv6.google.com >/dev/null 2>&1 && echo true) || curl -s -6 -m 4 icanhazip.com 2> /dev/null)
 
 # print help and exit script, if help flag was passed
 if [ ! -z "$PRINT_HELP" ]; then
@@ -85,7 +98,9 @@ if [ ! -z "$PRINT_HELP" ]; then
 	echo -e
 	echo -e "Flags:"
 	echo -e "       -f/d : skips the fio disk benchmark test"
+	echo -e "              On OSX, to obtain fio : brew install fio"
 	echo -e "       -i : skips the iperf network test"
+	echo -e "              On OSX, to obtain iperf : brew install iperf3"
 	echo -e "       -g : skips the geekbench performance test"
 	echo -e "       -h : prints this lovely message, shows any flags you passed,"
 	echo -e "            shows if fio/iperf3 local packages have been detected,"
@@ -167,6 +182,10 @@ echo -e "Basic System Information:"
 echo -e "---------------------------------"
 if [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
 	CPU_PROC=$(lscpu | grep "Model name" | sed 's/Model name: *//g')
+elif [[ $OSTYPE = *arwin*  && $ARCH == "x64" ]]; then
+	CPU_PROC=$(sysctl machdep.cpu.brand_string | sed 's/^.*: //g')
+	# Intel : return : Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz
+	# M1 : return : Apple M1
 else
 	CPU_PROC=$(awk -F: '/model name/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//')
 fi
@@ -176,27 +195,53 @@ if [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
 	CPU_FREQ=$(lscpu | grep "CPU max MHz" | sed 's/CPU max MHz: *//g')
 	[[ -z "$CPU_FREQ" ]] && CPU_FREQ="???"
 	CPU_FREQ="${CPU_FREQ} MHz"
+elif [[ $OSTYPE = *arwin*  && $ARCH == "x64" ]]; then
+	CPU_CORES=$(sysctl machdep.cpu.core_count | sed 's/^.*: //g')
+	CPU_FREQ=$(sysctl machdep.cpu.brand_string | sed -e 's/^.*@ //g' | sed 's/G/ G/g' | sed 's/M/ M/g')
+elif [[ $OSTYPE = *arwin*  ]]; then
+	echo "Processor Apple"
+	echo "Not yet ...."
 else
 	CPU_CORES=$(awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo)
 	CPU_FREQ=$(awk -F: ' /cpu MHz/ {freq=$2} END {print freq " MHz"}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//')
 fi
 echo -e "CPU cores  : $CPU_CORES @ $CPU_FREQ"
-CPU_AES=$(cat /proc/cpuinfo | grep aes)
+if [[ "$OSTYPE" == *"arwin"* ]]; then
+	CPU_AES=$(sysctl machdep.cpu.features | grep -i aes)
+else
+	CPU_AES=$(cat /proc/cpuinfo | grep aes)
+fi
 [[ -z "$CPU_AES" ]] && CPU_AES="\xE2\x9D\x8C Disabled" || CPU_AES="\xE2\x9C\x94 Enabled"
 echo -e "AES-NI     : $CPU_AES"
-CPU_VIRT=$(cat /proc/cpuinfo | grep 'vmx\|svm')
+if [[ "$OSTYPE" == *"arwin"* ]]; then
+	CPU_VIRT=$(sysctl machdep.cpu.features | grep -i 'vmx\|svm')
+else
+	CPU_VIRT=$(cat /proc/cpuinfo | grep 'vmx\|svm')
+fi
 [[ -z "$CPU_VIRT" ]] && CPU_VIRT="\xE2\x9D\x8C Disabled" || CPU_VIRT="\xE2\x9C\x94 Enabled"
 echo -e "VM-x/AMD-V : $CPU_VIRT"
-TOTAL_RAM=$(format_size $(free | awk 'NR==2 {print $2}'))
+if [[ "$OSTYPE" == *"arwin"* ]]; then
+	TOTAL_RAM=$(system_profiler SPHardwareDataType | grep -i "Memory" | awk '{print $2" "$3}')
+else
+	TOTAL_RAM=$(format_size "$(free | awk 'NR==2 {print $2}')")
+fi
 echo -e "RAM        : $TOTAL_RAM"
-TOTAL_SWAP=$(format_size $(free | grep Swap | awk '{ print $2 }'))
+if [[ "$OSTYPE" == *"arwin"* ]]; then
+	TOTAL_SWAP=$(sysctl vm.swapusage | sed 's/^.*l = //' | sed 's/used.*$//'  |  sed -r 's/([0-9])([a-zA-Z])/\1 \2iB/g')
+else
+	TOTAL_SWAP=$(format_size "$(free | grep Swap | awk '{ print $2 }')")
+fi
 echo -e "Swap       : $TOTAL_SWAP"
 # total disk size is calculated by adding all partitions of the types listed below (after the -t flags)
 TOTAL_DISK=$(format_size $(df -t simfs -t ext2 -t ext3 -t ext4 -t btrfs -t xfs -t vfat -t ntfs -t swap --total 2>/dev/null | grep total | awk '{ print $2 }'))
 echo -e "Disk       : $TOTAL_DISK"
 
 # create a directory in the same location that the script is being run to temporarily store YABS-related files
-DATE=`date -Iseconds | sed -e "s/:/_/g"`
+if [[ "$OSTYPE" == *"arwin"* ]]; then
+	DATE=$(date '+%Y-%m-%d%Z%H_%M_%S+%s')
+else
+	DATE=$(date -Iseconds | sed -e "s/:/_/g")
+fi
 YABS_PATH=./$DATE
 touch $DATE.test 2> /dev/null
 # test if the user has write permissions in the current directory and exit if not
@@ -300,9 +345,17 @@ function disk_test {
 		FIO_SIZE=2G
 	fi
 
+	if [[ "$OSTYPE" == *arwin* ]]; then
+		# Image libaio not available on OSX
+		CMD_TIMEOUT=""
+		OPT_IOENGINE=""
+	else
+		CMD_TIMEOUT="timeout 35 "
+		OPT_IOENGINE="--ioengine=libaio "
+	fi
 	# run a quick test to generate the fio test file to be used by the actual tests
 	echo -en "Generating fio test file..."
-	$FIO_CMD --name=setup --ioengine=libaio --rw=read --bs=64k --iodepth=64 --numjobs=2 --size=$FIO_SIZE --runtime=1 --gtod_reduce=1 --filename=$DISK_PATH/test.fio --direct=1 --minimal &> /dev/null
+	$FIO_CMD --name=setup $OPT_IOENGINE --rw=read --bs=64k --iodepth=64 --numjobs=2 --size=$FIO_SIZE --runtime=1 --gtod_reduce=1 --filename=$DISK_PATH/test.fio --direct=1 --minimal &> /dev/null
 	echo -en "\r\033[0K"
 
 	# get array of block sizes to evaluate
@@ -311,7 +364,7 @@ function disk_test {
 	for BS in "${BLOCK_SIZES[@]}"; do
 		# run rand read/write mixed fio test with block size = $BS
 		echo -en "Running fio random mixed R+W disk test with $BS block size..."
-		DISK_TEST=$(timeout 35 $FIO_CMD --name=rand_rw_$BS --ioengine=libaio --rw=randrw --rwmixread=50 --bs=$BS --iodepth=64 --numjobs=2 --size=$FIO_SIZE --runtime=30 --gtod_reduce=1 --direct=1 --filename=$DISK_PATH/test.fio --group_reporting --minimal 2> /dev/null | grep rand_rw_$BS)
+		DISK_TEST=$(timeout 35 $FIO_CMD --name=rand_rw_$BS $OPT_IOENGINE --rw=randrw --rwmixread=50 --bs=$BS --iodepth=64 --numjobs=2 --size=$FIO_SIZE --runtime=30 --gtod_reduce=1 --direct=1 --filename=$DISK_PATH/test.fio --group_reporting --minimal 2> /dev/null | grep rand_rw_$BS)
 		DISK_IOPS_R=$(echo $DISK_TEST | awk -F';' '{print $8}')
 		DISK_IOPS_W=$(echo $DISK_TEST | awk -F';' '{print $49}')
 		DISK_IOPS=$(format_iops $(awk -v a="$DISK_IOPS_R" -v b="$DISK_IOPS_W" 'BEGIN { print a + b }'))
@@ -531,7 +584,7 @@ function iperf_test {
 	do
 		echo -en "Performing $MODE iperf3 send test to $HOST (Attempt #$I of 5)..."
 		# select a random iperf port from the range provided
-		PORT=`shuf -i $PORTS -n 1`
+		PORT=$(shuf -i $PORTS -n 1)
 		# run the iperf test sending data from the host to the iperf server; includes
 		#   a timeout of 15s in case the iperf server is not responding; uses 8 parallel
 		#   threads for the network test
@@ -559,7 +612,7 @@ function iperf_test {
 	do
 		echo -n "Performing $MODE iperf3 recv test from $HOST (Attempt #$J of 5)..."
 		# select a random iperf port from the range provided
-		PORT=`shuf -i $PORTS -n 1`
+		PORT=$(shuf -i $PORTS -n 1)
 		# run the iperf test receiving data from the iperf server to the host; includes
 		#   a timeout of 15s in case the iperf server is not responding; uses 8 parallel
 		#   threads for the network test
@@ -688,6 +741,24 @@ if [ -z "$SKIP_IPERF" ]; then
 	fi
 fi
 
+get_geekbench_version() {
+	set -x
+	local VERSION=$1
+	local bench_url="https://cdn.geekbench.com"
+
+	if [[ $VERSION == *4* ]]; then
+		local bench_bin_url="Geekbench-4.3.3-Mac.zip"
+	else
+		local bench_bin_url="Geekbench-5.4.3-Mac.zip"
+	fi
+
+	GEEKBENCH_PATH_OSX="Geekbench $VERSION.app"
+	curl -s $bench_url/$bench_bin_url -o "$GEEKBENCH_PATH/$bench_bin_url"
+	unzip "$GEEKBENCH_PATH/$bench_bin_url" -d "$GEEKBENCH_PATH/" 2>/dev/null 1>&2 || exit 1
+	mv "$GEEKBENCH_PATH/$GEEKBENCH_PATH_OSX" "$GEEKBENCH_PATH/geekbench" 2>/dev/null 1>&2 || exit 1
+	bench_bin="geekbench/Contents/Resources/geekbench$VERSION"
+	rm "$GEEKBENCH_PATH/$bench_bin_url" 1>/dev/null 2>&1
+}
 # launch_geekbench
 # Purpose: This method is designed to run the Primate Labs' Geekbench 4/5 Cross-Platform Benchmark utility
 # Parameters:
@@ -704,7 +775,11 @@ function launch_geekbench {
 	elif [[ $VERSION == *4* && $ARCH != *aarch64* && $ARCH != *arm* ]]; then # Geekbench v4
 		echo -en "\nRunning GB4 benchmark test... *cue elevator music*"
 		# download the latest Geekbench 4 tarball and extract to geekbench temp directory
-		curl -s https://cdn.geekbench.com/Geekbench-4.4.4-Linux.tar.gz  | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
+		if [[ "$OSTYPE" == *arwin* ]]; then
+			get_geekbench_version $VERSION
+		else
+			curl -s https://cdn.geekbench.com/Geekbench-4.4.4-Linux.tar.gz  | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
+		fi
 
 		if [[ "$ARCH" == *"x86"* ]]; then
 			# check if geekbench file exists
@@ -717,11 +792,11 @@ function launch_geekbench {
 		else
 			# check if geekbench file exists
 			if test -f "geekbench.license"; then
-				$GEEKBENCH_PATH/geekbench4 --unlock `cat geekbench.license` > /dev/null 2>&1
+				$GEEKBENCH_PATH/$bench_bin --unlock `cat geekbench.license` > /dev/null 2>&1
 			fi
 			
 			# run the Geekbench 4 test and grep the test results URL given at the end of the test
-			GEEKBENCH_TEST=$($GEEKBENCH_PATH/geekbench4 --upload 2>/dev/null | grep "https://browser")
+			GEEKBENCH_TEST=$($GEEKBENCH_PATH/$bench_bin --upload 2>/dev/null | grep "https://browser")
 		fi
 	fi
 
@@ -734,18 +809,21 @@ function launch_geekbench {
 		else
 			echo -en "\nRunning GB5 benchmark test... *cue elevator music*"
 			# download the latest Geekbench 5 tarball and extract to geekbench temp directory
+			bench_bin="geekbench5"
 			if [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
 				curl -s https://cdn.geekbench.com/Geekbench-5.4.1-LinuxARMPreview.tar.gz  | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
+			elif [[ "$OSTYPE" == *arwin* ]]; then
+				get_geekbench_version $VERSION
 			else
 				curl -s https://cdn.geekbench.com/Geekbench-5.4.1-Linux.tar.gz | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
 			fi
 
 			# check if geekbench file exists
 			if test -f "geekbench.license"; then
-				$GEEKBENCH_PATH/geekbench5 --unlock `cat geekbench.license` > /dev/null 2>&1
+				$GEEKBENCH_PATH/$bench_bin --unlock `cat geekbench.license` > /dev/null 2>&1
 			fi
 
-			GEEKBENCH_TEST=$($GEEKBENCH_PATH/geekbench5 --upload 2>/dev/null | grep "https://browser")
+			GEEKBENCH_TEST=$($GEEKBENCH_PATH/$bench_bin --upload 2>/dev/null | grep "https://browser")
 		fi
 	fi
 
