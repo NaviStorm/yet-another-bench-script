@@ -808,7 +808,7 @@ get_geekbench_version() {
 	curl -s $bench_url/$bench_bin_url -o "$GEEKBENCH_PATH/$bench_bin_url"
 	unzip "$GEEKBENCH_PATH/$bench_bin_url" -d "$GEEKBENCH_PATH/" 2>/dev/null 1>&2 || exit 1
 	mv "$GEEKBENCH_PATH/$GEEKBENCH_PATH_OSX" "$GEEKBENCH_PATH/geekbench" 2>/dev/null 1>&2 || exit 1
-	if [[ $ARCH == *aarch* ]]; then
+	if [[ $ARCH == *aarch64* ]]; then
 		bench_bin="geekbench/Contents/Resources/geekbench_aarch64"
 	else
 		bench_bin="geekbench/Contents/Resources/geekbench$VERSION"
