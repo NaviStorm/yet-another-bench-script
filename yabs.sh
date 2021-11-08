@@ -398,14 +398,53 @@ function dd_test {
 	while [ $I -lt 3 ]
 	do
 		# write test using dd, "direct" flag is used to test direct I/O for data being stored to disk
-		DISK_WRITE_TEST=$(dd if=/dev/zero of=$DISK_PATH/$DATE.test bs=64k count=16k oflag=direct |& grep copied | awk '{ print $(NF-1) " " $(NF)}')
+		oflag="oflag=direct"
+		copied="copied"
+		if [[ $OSTYPE == *arwin* ]]; then
+			# OSX doesn't support oflag
+			oflag=""
+			copied="transferred"
+		fi
+		DISK_WRITE_TEST=$(dd if=/dev/zero of=$DISK_PATH/$DATE.test bs=64k count=16k $oflag 2>&1 | grep $copied | awk '{ print $(NF-1) " " $(NF)}')
+		if [[ $OSTYPE == *arwin* ]]; then 
+			if [[ $(echo "$DISK_WRITE_TEST" | grep "bytes/sec") ]]; then
+				DISK_WRITE_TEST=$(echo $DISK_WRITE_TEST | sed -E -e 's/\(|\)//g')
+				num=$(echo $DISK_WRITE_TEST | sed 's/ .*$//g')
+				if [[ $num -gt 1024 ]]; then
+					num=$(( num / 1024 ))
+					DISK_WRITE_TEST="$num KB/s"
+					if [[ $num -gt 1024 ]]; then
+						num=$(( num / 1024 ))
+						DISK_WRITE_TEST="$num MB/s"
+					fi
+				else
+					DISK_WRITE_TEST="$num B/s"
+				fi
+			fi
+		fi
 		VAL=$(echo $DISK_WRITE_TEST | cut -d " " -f 1)
 		[[ "$DISK_WRITE_TEST" == *"GB"* ]] && VAL=$(awk -v a="$VAL" 'BEGIN { print a * 1000 }')
 		DISK_WRITE_TEST_RES+=( "$DISK_WRITE_TEST" )
 		DISK_WRITE_TEST_AVG=$(awk -v a="$DISK_WRITE_TEST_AVG" -v b="$VAL" 'BEGIN { print a + b }')
 
-		# read test using dd using the 1G file written during the write test
-		DISK_READ_TEST=$(dd if=$DISK_PATH/$DATE.test of=/dev/null bs=8k |& grep copied | awk '{ print $(NF-1) " " $(NF)}')
+		# read test using dd using the 1G file written during the write test-E
+		DISK_READ_TEST=$(dd if=$DISK_PATH/$DATE.test of=/dev/null bs=8k 2>&1 | grep $copied | awk '{ print $(NF-1) " " $(NF)}')
+		if [[ $OSTYPE == *arwin* ]]; then 
+			if [[ $(echo "$DISK_READ_TEST" | grep "bytes/sec") ]]; then
+				DISK_READ_TEST=$(echo $DISK_READ_TEST | sed -E -e 's/\(|\)//g')
+				num=$(echo $DISK_READ_TEST | sed 's/ .*$//g')
+				if [[ $num -gt 1024 ]]; then
+					num=$(( num / 1024 ))
+					DISK_READ_TEST="$num KB/s"
+					if [[ $num -gt 1024 ]]; then
+						num=$(( num / 1024 ))
+						DISK_READ_TEST="$num MB/s"
+					fi
+				else
+					DISK_READ_TEST="$num B/s"
+				fi
+			fi
+		fi
 		VAL=$(echo $DISK_READ_TEST | cut -d " " -f 1)
 		[[ "$DISK_READ_TEST" == *"GB"* ]] && VAL=$(awk -v a="$VAL" 'BEGIN { print a * 1000 }')
 		DISK_READ_TEST_RES+=( "$DISK_READ_TEST" )
