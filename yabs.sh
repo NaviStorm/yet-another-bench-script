@@ -27,13 +27,7 @@ export LC_ALL=C
 
 # determine architecture of host
 ARCH=$(uname -m)
-if [[ $ARCH = *x86_64* ]]; then
-	# host is running a 64-bit kernel
-	ARCH="x64"
-elif [[ $ARCH = *i?86* ]]; then
-	# host is running a 32-bit kernel
-	ARCH="x86"
-elif [[ $ARCH = *aarch* || $ARCH = *arm* ]]; then
+if [[ $ARCH = *aarch* || $ARCH = *arm* ]]; then
 	KERNEL_BIT=`getconf LONG_BIT`
 	if [[ $KERNEL_BIT = *64* ]]; then
 		# host is running an ARM 64-bit kernel
@@ -43,6 +37,12 @@ elif [[ $ARCH = *aarch* || $ARCH = *arm* ]]; then
 		ARCH="arm"
 	fi
 	echo -e "\nARM-compatibility is considered *experimental*"
+elif [[ $ARCH = *x86_64* ]]; then
+	# host is running a 64-bit kernel
+	ARCH="x64"
+elif [[ $ARCH = *i?86* ]]; then
+	# host is running a 32-bit kernel
+	ARCH="x86"
 else
 	# host is running a non-supported kernel
 	echo -e "Architecture not supported by YABS."
@@ -180,27 +180,37 @@ function format_size {
 echo -e 
 echo -e "Basic System Information:"
 echo -e "---------------------------------"
-if [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
-	CPU_PROC=$(lscpu | grep "Model name" | sed 's/Model name: *//g')
-elif [[ $OSTYPE = *arwin*  && $ARCH == "x64" ]]; then
+if [[ $OSTYPE = *arwin*  && $ARCH = "x64" ]]; then
 	CPU_PROC=$(sysctl machdep.cpu.brand_string | sed 's/^.*: //g')
-	# Intel : return : Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz
-	# M1 : return : Apple M1
+elif [[ $OSTYPE = *arwin*  && $ARCH = *aarch64* ]]; then
+	CPU_PROC=$(sysctl machdep.cpu.brand_string | sed 's/^.*: //g')
+elif [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
+	CPU_PROC=$(lscpu | grep "Model name" | sed 's/Model name: *//g')
 else
 	CPU_PROC=$(awk -F: '/model name/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//')
 fi
+
 echo -e "Processor  : $CPU_PROC"
-if [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
+if [[ $OSTYPE = *arwin*  && $ARCH == "x64" ]]; then
+	CPU_CORES=$(sysctl machdep.cpu.core_count | sed 's/^.*: //g')
+	CPU_FREQ=$(sysctl machdep.cpu.brand_string | sed -e 's/^.*@ //g' | sed 's/G/ G/g' | sed 's/M/ M/g')
+elif [[ $OSTYPE = *arwin* && $ARCH == *aarch64*  ]]; then
+	identif=$( system_profiler SPHardwareDataType | grep -i "Identifier" | sed 's/^.*: //' | tr '[:upper:]' '[:lower:]')
+	CPU_FREQ=""
+#	case $identif in
+#		macmini9,1 ) 
+#			CPU_FREQ="3.2Ghz"
+#			;;
+#		*) 
+#			CPU_FREQ="3.2Ghz"
+#			;;
+#	esac
+	CPU_CORES=$(sysctl machdep.cpu.core_count | sed 's/^.*: //g')
+elif [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
 	CPU_CORES=$(lscpu | grep "^[[:blank:]]*CPU(s):" | sed 's/CPU(s): *//g')
 	CPU_FREQ=$(lscpu | grep "CPU max MHz" | sed 's/CPU max MHz: *//g')
 	[[ -z "$CPU_FREQ" ]] && CPU_FREQ="???"
 	CPU_FREQ="${CPU_FREQ} MHz"
-elif [[ $OSTYPE = *arwin*  && $ARCH == "x64" ]]; then
-	CPU_CORES=$(sysctl machdep.cpu.core_count | sed 's/^.*: //g')
-	CPU_FREQ=$(sysctl machdep.cpu.brand_string | sed -e 's/^.*@ //g' | sed 's/G/ G/g' | sed 's/M/ M/g')
-elif [[ $OSTYPE = *arwin*  ]]; then
-	echo "Processor Apple"
-	echo "Not yet ...."
 else
 	CPU_CORES=$(awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo)
 	CPU_FREQ=$(awk -F: ' /cpu MHz/ {freq=$2} END {print freq " MHz"}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//')
@@ -233,7 +243,11 @@ else
 fi
 echo -e "Swap       : $TOTAL_SWAP"
 # total disk size is calculated by adding all partitions of the types listed below (after the -t flags)
-TOTAL_DISK=$(format_size $(df -t simfs -t ext2 -t ext3 -t ext4 -t btrfs -t xfs -t vfat -t ntfs -t swap --total 2>/dev/null | grep total | awk '{ print $2 }'))
+if [[ $OSTYPE == *arwin* ]]; then
+	TOTAL_DISK=$(df -h | head -2 | tail -1| awk '{print $2}')
+else
+	TOTAL_DISK=$(format_size $(df -t simfs -t ext2 -t ext3 -t ext4 -t btrfs -t xfs -t vfat -t ntfs -t swap --total 2>/dev/null | grep total | awk '{ print $2 }'))
+fi
 echo -e "Disk       : $TOTAL_DISK"
 
 # create a directory in the same location that the script is being run to temporarily store YABS-related files
@@ -781,7 +795,6 @@ if [ -z "$SKIP_IPERF" ]; then
 fi
 
 get_geekbench_version() {
-	set -x
 	local VERSION=$1
 	local bench_url="https://cdn.geekbench.com"
 
@@ -795,7 +808,11 @@ get_geekbench_version() {
 	curl -s $bench_url/$bench_bin_url -o "$GEEKBENCH_PATH/$bench_bin_url"
 	unzip "$GEEKBENCH_PATH/$bench_bin_url" -d "$GEEKBENCH_PATH/" 2>/dev/null 1>&2 || exit 1
 	mv "$GEEKBENCH_PATH/$GEEKBENCH_PATH_OSX" "$GEEKBENCH_PATH/geekbench" 2>/dev/null 1>&2 || exit 1
-	bench_bin="geekbench/Contents/Resources/geekbench$VERSION"
+	if [[ $ARCH == *aarch* ]]; then
+		bench_bin="geekbench/Contents/Resources/geekbench_aarch64"
+	else
+		bench_bin="geekbench/Contents/Resources/geekbench$VERSION"
+	fi
 	rm "$GEEKBENCH_PATH/$bench_bin_url" 1>/dev/null 2>&1
 }
 # launch_geekbench
@@ -849,10 +866,10 @@ function launch_geekbench {
 			echo -en "\nRunning GB5 benchmark test... *cue elevator music*"
 			# download the latest Geekbench 5 tarball and extract to geekbench temp directory
 			bench_bin="geekbench5"
-			if [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
-				curl -s https://cdn.geekbench.com/Geekbench-5.4.1-LinuxARMPreview.tar.gz  | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
-			elif [[ "$OSTYPE" == *arwin* ]]; then
+			if [[ "$OSTYPE" == *arwin* ]]; then
 				get_geekbench_version $VERSION
+			elif [[ $ARCH = *aarch64* || $ARCH = *arm* ]]; then
+				curl -s https://cdn.geekbench.com/Geekbench-5.4.1-LinuxARMPreview.tar.gz  | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
 			else
 				curl -s https://cdn.geekbench.com/Geekbench-5.4.1-Linux.tar.gz | tar xz --strip-components=1 -C $GEEKBENCH_PATH &>/dev/null
 			fi
